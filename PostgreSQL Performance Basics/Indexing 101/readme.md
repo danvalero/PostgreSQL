@@ -9,17 +9,16 @@
 
 I will go step by step in the process of indexing a table to improve query performance. For this scenario, we will focus on reducing the number of pages read by the query as the criteria for success.
 
-> We will see some basic options to solve some common issues, however, when defining the indexes on a table you must not considered queries one by one but all queries that use the table, to avoid duplicated or redundant indexes.
+> We will see some basic options to solve some common issues, however, when defining the indexes on a table you must not consider queries one by one but all queries that use the table, to avoid duplicated or redundant indexes.
 
-
+---
 ## 1. Setting up the environment
 
 If you want to do the demos by yourself, you can use same test database [Pagila](https://github.com/devrimgunduz/pagila):
 
-NOTE: This steps were completed on an Azure Database for PostgreSQL Flexible Server v13 Standard_Ds2_v3
+NOTE: This steps were completed on an Azure Database for PostgreSQL Flexible Server v18 Standard_D4ds_v5.
 
 ---
-
 ## 2. Basic indexing 1 (searching conditions on a single column)
 
 If you come from SQL Server or MySQL, consider that in PostgreSQL there is no such thing as a Clustered Index. 
@@ -32,160 +31,198 @@ As PostgreSQL documentation states:
  
 1. Run a query that filters rows using the first column on the primary key
 
- 	Use the [EXPLAIN](https://www.postgresql.org/docs/current/sql-explain.html) command to see the execution plan created
+   Use the [EXPLAIN](https://www.postgresql.org/docs/current/sql-explain.html) command to see the execution plan created
 
-	```sql
-	EXPLAIN (ANALYZE, COSTS)
-	SELECT * 
-	FROM public.customer
-	WHERE customer_id=99;
+   ```sql
+   EXPLAIN (ANALYZE, COSTS)
+   SELECT * 
+   FROM public.customer
+   WHERE customer_id=99;
    ```
 
-	![F1](Media/f1.png)
+   ```
+   QUERY PLAN
+   ----------------------------------------------------------------------------------------------------------------------------
+   Index Scan using customer_pkey on customer  (cost=0.28..4.29 rows=1 width=74) (actual time=0.014..0.015 rows=1.00 loops=1)
+   Index Cond: (customer_id = 99)
+   Index Searches: 1
+   Buffers: shared hit=3
+   ```
 
+   Notice the plan does an **Index Scan** using *customer_pkey* on *customer* to efficiently identify the rows that must be returned
 
-	Notice the plan does an **Index Scan** using *customer_pkey* on *customer* to efficiently identify the rows that must be returned
+   An **Index Scan**, does a B-tree traversal walks through the leaf nodes to find all matching entries, and fetches the corresponding table data.
+   An Index Scan fetches one tuple-pointer at a time from the index, and immediately visits that tuple in the table
 
-	An **Index Scan**, does a B-tree traversal walks through the leaf nodes to find all matching entries, and fetches the corresponding table data.
-	An Index Scan fetches one tuple-pointer at a time from the index, and immediately visits that tuple in the table
-
-	**Question**: No index has been explicitly created on *customer*. Where did the index *sales_detail_pk* on *sales_detail* comes from? 
+   **Question**: No index has been explicitly created on *customer*. Where did the index *sales_detail_pk* on *sales_detail* comes from? 
 	
-	**Answer**: PostgreSQL creates an unique index when the primary key is defined 
+   **Answer**: PostgreSQL creates an unique index when the primary key is defined 
 
-	The cost for this plan is 4.29 (How it is calculated will be covered in another document, but for now it is good for comparison purposes) 
+   The cost for this plan is 4.29 (How it is calculated will be covered in another document, but for now it is good for comparison purposes) 
 
-	The execution plan estimated it would return 1 row (this is important as the estimation is used to define if an index should be used, but how it is calculated will be covered in another document), and it returned 1 row (expected as the query filters by the primary key).
+   The execution plan estimated it would return 1 row (this is important as the estimation is used to define if an index should be used, but how it is calculated will be covered in another document), and it returned 1 row (expected as the query filters by the primary key).
 
 1. Query the table filtering by a column not included in the Primary Key
 
-	```sql
-	EXPLAIN (ANALYZE, COSTS)
-	SELECT customer_id, first_name, last_name, email
-	FROM public.customer
-	WHERE first_name= 'LESLIE';
-	```
+   ```sql
+   EXPLAIN (ANALYZE, COSTS)
+   SELECT customer_id, first_name, last_name, email
+   FROM public.customer
+   WHERE first_name= 'LESLIE';
+   ```
 
-	This query uses a **Seq Scan** with a cost of 16.49 on *customer* as there is no index by *first_name*.
+   This query uses a **Seq Scan** with a cost of 16.49 on *customer* as there is no index by *first_name*.
 
-	![F2](Media/f2.png)
+   ```
+   QUERY PLAN
+   -------------------------------------------------------------------------------------------------------
+   Seq Scan on customer  (cost=0.00..16.49 rows=2 width=49) (actual time=0.022..0.051 rows=2.00 loops=1)
+   Filter: (first_name = 'LESLIE'::text)
+   Rows Removed by Filter: 597
+   Buffers: shared hit=9
+   ```
 
-	An **Seq Scan** operation scans the entire table 
+   An **Seq Scan** operation scans the entire table 
 
-	Create an index on *first_name*
+   Create an index on *first_name*
 
-	```sql
-	CREATE INDEX ix_customer_first_name ON public.customer (first_name);
-	```
+   ```sql
+   CREATE INDEX ix_customer_first_name ON public.customer (first_name);
+   ```
+   
+   Run the query again
 
-	Run the query again
+   ```sql
+   EXPLAIN (ANALYZE, COSTS)
+   SELECT customer_id, first_name, last_name, email
+   FROM public.customer
+   WHERE first_name= 'LESLIE';
+   ```
 
-	```sql
-	EXPLAIN (ANALYZE, COSTS)
-	SELECT customer_id, first_name, last_name, email
-	FROM public.customer
-	WHERE first_name= 'LESLIE';
-	```
+   ```
+   QUERY PLAN
+   -------------------------------------------------------------------------------------------------------
+   Bitmap Heap Scan on customer  (cost=2.29..5.37 rows=2 width=49) (actual time=0.032..0.033 rows=2.00 loops=1)
+   Recheck Cond: (first_name = 'LESLIE'::text)
+   Heap Blocks: exact=2
+   Buffers: shared hit=4
+   ->  Bitmap Index Scan on ix_customer_first_name  (cost=0.00..2.29 rows=2 width=0) (actual time=0.018..0.018 rows=2.00 loops=1)
+         Index Cond: (first_name = 'LESLIE'::text)
+         Index Searches: 1
+         Buffers: shared hit=2
+   ```
 
-	![F3](Media/f3.png)
+   Notice the plan now does an **Bitmap Index Scan** using the new index *ix_customer_first_name* on *customer*, and the cost went down to 5.37, much better than 16.49.
 
-	Notice the plan now does an **Bitmap Index Scan** using the new index *ix_customer_first_name* on *customer*, and the cost went down to 5.37, much better than 16.49.
-
-	**Bitmap Index Scan** as explained at [Tom Lane’s post to the PostgreSQL performance mailing list](https://www.postgresql.org/message-id/12553.1135634231@sss.pgh.pa.us)
-	> A bitmap scan fetches all the tuple-pointers from the index in one go, sorts them using an in-memory “bitmap” data structure, and then visits the table tuples in physical tuple-location order."
+   **Bitmap Index Scan** as explained at [Tom Lane’s post to the PostgreSQL performance mailing list](https://www.postgresql.org/message-id/12553.1135634231@sss.pgh.pa.us)
+	
+   > A bitmap scan fetches all the tuple-pointers from the index in one go, sorts them using an in-memory “bitmap” data structure, and then visits the table tuples in physical tuple-location order."
 
    The **bitmap heap scan** operation takes a row location bitmap generated by a Bitmap Index Scan and looks up the relevant data on the table. So it is expected to see **Bitmap Index Scan** and **Bitmap Heap Scan** together.
 
-	The cost for the query went down from 16.49 to 5.37. Is there any way to make it even better?
+   The cost for the query went down from 16.49 to 5.37. Is there any way to make it even better?
 
-	Drop the index you just created (ix_customer_first_name), and create a new index by *first_name* (used in the WHERE clause) that includes the columns used in the SELECT clause 
-
-	```sql
-	DROP INDEX ix_customer_first_name;
-
-	CREATE INDEX ix_customer_first_name ON public.customer (first_name)
-	INCLUDE (customer_id, last_name, email);
-	```
-		
-	Run the query again
-
-	```sql
-	EXPLAIN (ANALYZE, COSTS)
-	SELECT customer_id, first_name, last_name, email
-	FROM public.customer
-	WHERE first_name= 'LESLIE';
-	```
-	
-	![F4](Media/f4.png)
-
-	Notice the plan now does an **Index Only Scan** using *ix_customer_first_name* on *customer*, and the cost went down to 2.31, better than 5.37
-
-	The **Index Only Scan** means the query returned all the data without accessing the table, just the index. 
-	
-	This index is called a covering index. An index that includes all the columns needed to satisfy the query (all columns in the WHERE clause and also in the SELECT clause) so there is no need to access the table to return the information,
-
-	However, if your query changes and uses a column not in the index
+   Drop the index you just created (ix_customer_first_name), and create a new index by *first_name* (used in the WHERE clause) that includes the columns used in the SELECT clause 
 
    ```sql
-	EXPLAIN (ANALYZE, COSTS)
-	SELECT customer_id, first_name, last_name, email, active
-	FROM public.customer
-	WHERE first_name= 'LESLIE';
-	```
+   DROP INDEX ix_customer_first_name;
 
-	The index is not a covering index for that query and other operators are used.
+   CREATE INDEX ix_customer_first_name ON public.customer (first_name)
+   INCLUDE (customer_id, last_name, email);
+   ```
+		
+   Run the query again
 
-	> **IMPORTANT:** When creating covering indexes, do not have the practice of adding all columns of the table as included columns in all indexes. If you do that, database will be bigger (as indexes are bigger) and it can even lead to worse perfornmace.
+   ```sql
+   EXPLAIN (ANALYZE, COSTS)
+   SELECT customer_id, first_name, last_name, email
+   FROM public.customer
+   WHERE first_name= 'LESLIE';
+   ```
+	
+   ![F4](Media/f4.png)
+
+   Notice the plan now does an **Index Only Scan** using *ix_customer_first_name* on *customer*, and the cost went down to 2.31, better than 5.37
+
+   The **Index Only Scan** means the query returned all the data without accessing the table, just the index. 
+	
+   This index is called a covering index. An index that includes all the columns needed to satisfy the query (all columns in the WHERE clause and also in the SELECT clause) so there is no need to access the table to return the information,
+
+   However, if your query changes and uses a column not in the index
+
+   ```sql
+   EXPLAIN (ANALYZE, COSTS)
+   SELECT customer_id, first_name, last_name, email, active
+   FROM public.customer
+   WHERE first_name= 'LESLIE';
+   ```
+
+   The index is not a covering index for that query and other operators are used.
+
+   > **IMPORTANT:** When creating covering indexes, do not have the practice of adding all columns of the table as included columns in all indexes. If you do that, database will be bigger (as indexes are bigger) and it can even lead to worse perfornmace.
 
 1. Let's see what happens when a wildcard is used in the search value
 
    Find a row by using a simple equality condition on an indexed column  
 
-	```sql
-	EXPLAIN (ANALYZE, COSTS)
-	SELECT *
-	FROM public.customer
-	WHERE first_name= 'LESLIE';
-	```
+   ```sql
+   EXPLAIN (ANALYZE, COSTS)
+   SELECT *
+   FROM public.customer
+   WHERE first_name= 'LESLIE';
+   ```
 
-	The plan will use a **Bitmap Index Scan** as we had seen before... nothing new 5.37
+   The plan will use a **Bitmap Index Scan** as we had seen before... nothing new 5.37
 
-	Let's retrieve all rows where the value on *first_name* ends with *LIE*. Execute:
+   Let's retrieve all rows where the value on *first_name* ends with *LIE*. Execute:
 
-	```sql
-	EXPLAIN (ANALYZE, COSTS)
-	SELECT *
-	FROM public.customer
-	WHERE first_name like '%LIE';
-	```
+   ```sql
+   EXPLAIN (ANALYZE, COSTS)
+   SELECT *
+   FROM public.customer
+   WHERE first_name like '%LIE';
+   ```
 
-	![F5](Media/f5.png)
+   ```
+   QUERY PLAN
+   -------------------------------------------------------------------------------------------------------
+   Seq Scan on customer  (cost=0.00..16.49 rows=10 width=74) (actual time=0.016..0.065 rows=10.00 loops=1)
+   Filter: (first_name ~~ '%LIE'::text)
+   Rows Removed by Filter: 589
+   Buffers: shared hit=9
+   ```
 
-	Notice it uses a **Seq Scan** (no index is used) on *customer* with a cost of 16.49 
+   Notice it uses a **Seq Scan** (no index is used) on *customer* with a cost of 16.49 
 	
-	Let's retrieve all rows where the value on *first_name* starts with *LES*. Execute:
+   Let's retrieve all rows where the value on *first_name* starts with *LES*. Execute:
 
-	```sql
-	EXPLAIN (ANALYZE, COSTS)
-	SELECT *
-	FROM public.customer
-	WHERE first_name like 'LES%';
-	```
+   ```sql
+   EXPLAIN (ANALYZE, COSTS)
+   SELECT *
+   FROM public.customer
+   WHERE first_name like 'LES%';
+   ```
+
+   ```
+   QUERY PLAN
+   -------------------------------------------------------------------------------------------------------
+   Seq Scan on customer  (cost=0.00..16.49 rows=2 width=74) (actual time=0.022..0.052 rows=3.00 loops=1)
+   Filter: (first_name ~~ 'LES%'::text)
+   Rows Removed by Filter: 596
+   Buffers: shared hit=9
+   ```
+
+   Notice that the execution plan is exactly the same. 
+
+   **IMPORTANT:** Using wildcards make an index on the column not usable. This is different to other DBMS like SQL Server where other optimizations exists. See [SQL Serve Indexing 101](https://github.com/danvalero/SQLServer/tree/main/SQL%20Server%20Indexing%20101) for more details) 
 	
-	![F6](Media/f6.png)
+   For demo purposes, let's delete the index on *first_name*
 
-	Notice that the execution plan is exactly the same. 
-
-	**IMPORTANT:** Using wildcards make an index on the column not usable. This is different to other DBMS like SQL Server where other optimizations exists. See [SQL Serve Indexing 101](https://github.com/danvalero/SQLServer/tree/main/SQL%20Server%20Indexing%20101) for more details) 
-	
-	For demo purposes, let's delete the index on *first_name*
-
-	```sql
-	DROP INDEX ix_customer_first_name;
-	```
+   ```sql
+   DROP INDEX ix_customer_first_name;
+   ```
 
 ---
-
 ## 3. Basic indexing 2 (searching conditions on multiple column)
 
 1. Find a row by using equality conditions with *AND* on two different columns, consider that an index on *last_name* exists
@@ -197,7 +234,15 @@ As PostgreSQL documentation states:
 	WHERE first_name= 'LESLIE' AND last_name = 'GORDON';
 	```
 
-	![F7](Media/f7.png)
+   ```
+   QUERY PLAN
+   -------------------------------------------------------------------------------------------------------
+   Index Scan using idx_last_name on customer  (cost=0.28..4.30 rows=1 width=74) (actual time=0.018..0.019 rows=1.00 loops=1)
+   Index Cond: (last_name = 'GORDON'::text)
+   Filter: (first_name = 'LESLIE'::text)
+   Index Searches: 1
+   Buffers: shared hit=3
+   ```
 
    Notice the plan does an **Index Scan** using *idx_last_name* on *customer* with a cost of 4.30. Expected.
 
@@ -235,7 +280,20 @@ As PostgreSQL documentation states:
 	WHERE first_name= 'LESLIE' AND last_name = 'GORDON';
 	```
 
-	![F8](Media/f8.png)
+   ```
+   QUERY PLAN
+   -------------------------------------------------------------------------------------------------------
+   Bitmap Heap Scan on customer  (cost=2.29..5.38 rows=1 width=74) (actual time=0.026..0.027 rows=1.00 loops=1)
+     Recheck Cond: (first_name = 'LESLIE'::text)
+     Filter: (last_name = 'GORDON'::text)
+     Rows Removed by Filter: 1
+     Heap Blocks: exact=2
+     Buffers: shared hit=4
+     ->  Bitmap Index Scan on ix_customer_first_name  (cost=0.00..2.29 rows=2 width=0) (actual time=0.015..0.016 rows=2.00 loops=1)
+           Index Cond: (first_name = 'LESLIE'::text)
+           Index Searches: 1
+           Buffers: shared hit=2
+   ```
 
 	Notice the plan does a **Bitmap Index Scan** using *ix_customer_first_name* on *customer*, and the total cost of the plan is 5.38
 
@@ -258,13 +316,20 @@ As PostgreSQL documentation states:
 
 	Notice it uses the composite index as the cost is the lowest (4.29)
 
-	![F9](Media/f9.png)
+   ```
+   QUERY PLAN
+   -------------------------------------------------------------------------------------------------------
+   Index Scan using ix_customer_first_last_name on customer  (cost=0.28..4.29 rows=1 width=74) (actual time=0.018..0.019 rows=1.00 loops=1)
+     Index Cond: ((first_name = 'LESLIE'::text) AND (last_name = 'GORDON'::text))
+     Index Searches: 1
+     Buffers: shared hit=3
+   ```
 
 	Take the database to the original state
 	```sql
 	DROP INDEX ix_customer_first_name;
 	DROP INDEX ix_customer_first_last_name;
-   CREATE INDEX idx_last_name ON public.customer (last_name);
+    CREATE INDEX idx_last_name ON public.customer (last_name);
 	```
 
 
@@ -277,8 +342,15 @@ As PostgreSQL documentation states:
 	WHERE first_name= 'LESLIE' OR last_name = 'GORDON';
 	```
 
-	![3 10](Media/3-10.png)
-
+   ```
+   QUERY PLAN
+   -------------------------------------------------------------------------------------------------------
+   Seq Scan on customer  (cost=0.00..17.98 rows=3 width=74) (actual time=0.027..0.068 rows=2.00 loops=1)
+     Filter: ((first_name = 'LESLIE'::text) OR (last_name = 'GORDON'::text))
+     Rows Removed by Filter: 597
+     Buffers: shared hit=9
+   ```
+   
 	This query uses a **Seq Scan** with a cost of 17.98 on *customer*. It is reading the whole table
 
 	Question: Why is it reading the whole table if there is an index on one of the column used to filter?
@@ -300,13 +372,29 @@ As PostgreSQL documentation states:
 	WHERE first_name= 'LESLIE' OR last_name = 'GORDON';
 	```
 
-   ![3 11](Media/3-11.png)
+   ```
+   QUERY PLAN
+   -------------------------------------------------------------------------------------------------------
+   Bitmap Heap Scan on customer  (cost=4.57..8.89 rows=3 width=74) (actual time=0.026..0.027 rows=2.00 loops=1)
+     Recheck Cond: ((first_name = 'LESLIE'::text) OR (last_name = 'GORDON'::text))
+     Heap Blocks: exact=2
+     Buffers: shared hit=6
+     ->  BitmapOr  (cost=4.57..4.57 rows=3 width=0) (actual time=0.018..0.019 rows=0.00 loops=1)
+           Buffers: shared hit=4
+           ->  Bitmap Index Scan on ix_customer_first_name  (cost=0.00..2.29 rows=2 width=0) (actual time=0.014..0.014 rows=2.00 loops=1)
+                 Index Cond: (first_name = 'LESLIE'::text)
+                 Index Searches: 1
+                 Buffers: shared hit=2
+           ->  Bitmap Index Scan on idx_last_name  (cost=0.00..2.28 rows=1 width=0) (actual time=0.004..0.004 rows=1.00 loops=1)
+                 Index Cond: (last_name = 'GORDON'::text)
+                 Index Searches: 1
+                 Buffers: shared hit=2
+   ```
 
 	Notice that now it is using both indexes. *ix_customer_first_name* to get the rows that satisfy the filter on *first_name*, *idx_last_name* to get the rows that satisfy the filter on *last_name* and finally combining them (*BitmapOr* operation) and the total plan cost is 8.89, much better than reading the whole table with a cost of 17.98
 
 
 ---
-
 ## 4. Why is PostgreSQL not using existing indexes?
 
 Some common causes for PostgreSQL not to use (or not used as we expect) an existing index, and what we can do about it.
@@ -321,7 +409,14 @@ SELECT * FROM public.customer
 WHERE active = 0;
 ```
 
-![4 01](Media/4-01.png)
+```
+QUERY PLAN
+-------------------------------------------------------------------------------------------------------
+ Seq Scan on customer  (cost=0.00..16.49 rows=15 width=74) (actual time=0.013..0.056 rows=15.00 loops=1)
+   Filter: (active = 0)
+   Rows Removed by Filter: 584
+   Buffers: shared hit=9
+```
 
 The plan does an **Seq Scan** on *customer* as there is no index on *active*
 
@@ -339,7 +434,14 @@ SELECT * FROM public.customer
 WHERE active = 0;
 ```
 
-![4 02](Media/4-02.png)
+```
+QUERY PLAN
+-------------------------------------------------------------------------------------------------------
+ Index Scan using ix_customer_active on customer  (cost=0.15..6.29 rows=15 width=74) (actual time=0.016..0.025 rows=15.00 loops=1)
+   Index Cond: (active = 0)
+   Index Searches: 1
+   Buffers: shared hit=10
+```
 
 The plan does an **Index Scan** using *ix_customer_active* on *customer*.. Great, the index helps
 
@@ -351,7 +453,15 @@ SELECT * FROM public.customer
 WHERE active = 1;
 ```
 
-![4 03](Media/4-03.png)
+```
+QUERY PLAN
+-------------------------------------------------------------------------------------------------------
+ Seq Scan on customer  (cost=0.00..16.49 rows=584 width=74) (actual time=0.012..0.070 rows=584.00 loops=1)
+   Filter: (active = 1)
+   Rows Removed by Filter: 15
+   Buffers: shared hit=9
+
+```
 
 Notice the plan is not using the index. Instead, it is doing a **Seq Scan** and reading the whole table. 
 
@@ -366,7 +476,13 @@ GROUP BY active
 ORDER BY 2 desc;
 ```
 
-![4 04](Media/4-04.png)
+```
+ active | count
+--------+-------
+      1 |   584
+      0 |    15
+
+```
 
 Notice that approximately 2.6% of the rows have a value of *0*, and 97.4% of the rows have a value of *1*
 
@@ -392,7 +508,12 @@ WHERE tablename = 'customer'
       attname = 'active';
 ```
 
-![4 05](Media/4-05.png)
+```
+ attname | inherited | most_common_vals |    most_common_freqs
+---------+-----------+------------------+--------------------------
+ active  | f         | {1,0}            | {0.97495824,0.025041737}
+
+```
 
 You can see the most commom values (*most_common_vals*) for the columnm and a list of the frequencies of the most common element values (*most_common_elem_freqs*). Notice that are exactly what we got when manually counted the values for the column
 
@@ -427,7 +548,15 @@ WHERE DATE_PART('year',create_date) = 2022
       DATE_PART('day',create_date) = 01;
 ```
 
-![4 10](Media/4-10.png)
+```
+QUERY PLAN
+-------------------------------------------------------------------------------------------------------
+ Seq Scan on customer  (cost=0.00..28.47 rows=1 width=74) (actual time=0.167..0.168 rows=0.00 loops=1)
+   Filter: ((date_part('year'::text, (create_date)::timestamp without time zone) = '2022'::double precision) AND (date_part('month'::text, (create_date)::timestamp without time zone) = '2'::double precision) AND (date_part('day'::text, (create_date)::timestamp without time zone) = '1'::double precision))
+   Rows Removed by Filter: 599
+   Buffers: shared hit=9
+
+```
 
 Notice the plan does a **Seq Scan** on *customer* with a cost of 28.47. 
 
@@ -451,7 +580,15 @@ WHERE create_date>= '2022-02-01'
       create_date < '2022-02-02';
 ```
 
-![4 11](Media/4-11.png)
+```
+QUERY PLAN
+-------------------------------------------------------------------------------------------------------
+ Index Scan using ix_customer_create_date on customer  (cost=0.15..4.17 rows=1 width=74) (actual time=0.012..0.012 rows=0.00 loops=1)
+   Index Cond: ((create_date >= '2022-02-01'::date) AND (create_date < '2022-02-02'::date))
+   Index Searches: 1
+   Buffers: shared hit=1
+
+```
 
 Notice the plan now uses the index, and the cost of the query went down to 4.17. 
 
@@ -464,7 +601,25 @@ ON public.customer (DATE_PART('year',create_date),DATE_PART('month',create_date)
 
 and the original query will use it.
 
-![4 12](Media/4-12.png)
+```sql
+EXPLAIN (ANALYZE, COSTS)
+SELECT *
+FROM public.customer
+WHERE DATE_PART('year',create_date) = 2022
+      AND 
+      DATE_PART('month',create_date) = 02
+      AND 
+      DATE_PART('day',create_date) = 01;
+```
+
+```
+QUERY PLAN
+-------------------------------------------------------------------------------------------------------
+ Index Scan using ix_customer_create_date2 on customer  (cost=0.28..4.30 rows=1 width=74) (actual time=0.013..0.013 rows=0.00 loops=1)
+   Index Cond: ((date_part('year'::text, (create_date)::timestamp without time zone) = '2022'::double precision) AND (date_part('month'::text, (create_date)::timestamp without time zone) = '2'::double precision) AND (date_part('day'::text, (create_date)::timestamp without time zone) = '1'::double precision))
+   Index Searches: 1
+   Buffers: shared hit=2
+```
 
 NOTE: We proposed 2 different options to make the plan use an index, however, which option is better depends on multiple factor 
 
@@ -487,7 +642,14 @@ FROM public.customer
 WHERE UPPER(first_name)= UPPER('Leslie');
 ```
 
-![4 13](Media/4-13.png)
+```
+QUERY PLAN
+-------------------------------------------------------------------------------------------------------
+ Seq Scan on customer  (cost=0.00..17.98 rows=3 width=74) (actual time=0.046..0.144 rows=2.00 loops=1)
+   Filter: (upper(first_name) = 'LESLIE'::text)
+   Rows Removed by Filter: 597
+   Buffers: shared hit=9
+```
 
 The plan does not uses the index on *first_name* because the index is on *first_name*, not *UPPER(first_name)*
 
