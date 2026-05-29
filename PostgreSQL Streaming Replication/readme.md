@@ -3,23 +3,22 @@
 **Author**: Daniel Valero
 
 - [1. Setting up the environment](#1-setting-up-the-environment)
-- [2. Basic indexing 1 (searching conditions on a single column)](#2-basic-indexing-1-searching-conditions-on-a-single-column)
-- [3. Basic indexing 2 (searching conditions on multiple column)](#3-basic-indexing-2-searching-conditions-on-multiple-column)
-- [4. Why is PostgreSQL not using existing indexes?](#4-why-is-postgresql-not-using-existing-indexes?)
-
-
-> This lab uses PostgreSQL v18. The behavior can be diferrent for older version. Check documentations
+- [2. Prepare the primary PostgreSQL cluster for replication)](#2-prepare-the-primary-postgresql-cluster-for-replication)
+- [3. Add the PostgreSQL replicas](#3-add-the-postgresql-replicas)
+- [4. Test and monitor replication](#4-test-and-monitor-replication)
+- [5. Set a synchronous replica server](#5-set-a-synchronous-replica-server)
+- [5. What happens to the WAL files in the primary when a replica is not available?](#6-what-happens-to-the-wal-files-in-the-primary-when-a-replica-is-not-available)
 
 ## 1. Setting up the environment
 
-For this lab, four differente virutal machines running Ubuntu Server 24.04 LTS:
+For this lab, four different virtual machines running Ubuntu Server 24.04 LTS:
 
 - pgserverA
 - pgserverB
 - pgserverC
 - pgserverD
 
-Name resolution can be set up in any way your prefer (by setting a DNS server, using the */etc/hosts* file or any other methiod you prefer). Also, firewall must be set to allow traffic between the servers. This configuration will be set aside during this lab but it is something you must do before starting
+Name resolution can be set up in any way your prefer (by setting a DNS server, using the */etc/hosts* file or any other method you prefer). Also, firewall must be set up to allow traffic between the servers. This configuration will be set aside during this lab, but it is something you must do before starting
 
 NOTE: I used Azure and used the cli command [here](support_files/azure_env_lab_cli.txt) to create a VNET and VMs for the lab.
 
@@ -34,15 +33,17 @@ For reference, when installing PostgreSQL 18 unsing this method, the important P
 - binnary files: /usr/lib/postgresql/18/bin
 - log files: more /var/log/postgresql/
 
+> This lab uses PostgreSQL v18. The behavior can be different for older version. Check documentations
+
 In PostgreSQL on pgserverA, restore the test database [Pagila](https://github.com/devrimgunduz/pagila)
 
 ---
 
-## 2. Prepare the primary server for replication
+## 2. Prepare the primary PostgreSQL cluster for replication
 
 1. Connect to the primary PostgreSQL cluster
 
-1. Set the paratmers required to support streaming replication
+1. Set the parameters required to support streaming replication
    
    NOTE: You can modify the postgresql.conf or you can use ALTER SYSTEM
 
@@ -54,7 +55,7 @@ In PostgreSQL on pgserverA, restore the test database [Pagila](https://github.co
    max_replication_slots = 10
    wal_sender_timeout = 60 
 
-1. Create an user the replica server will use to connect and push data
+1. Create the user (*repuser* in this example) the replica server will use to connect and push data
 
    ```sql
    CREATE USER repuser WITH replication ENCRYPTED PASSWORD 'complexpassword1.';
@@ -73,7 +74,7 @@ In PostgreSQL on pgserverA, restore the test database [Pagila](https://github.co
    - 10.0.2.6 for pgserverC
    - 10.0.2.7 for pgserverD
 
-   NOTE: modifiy the IP addresses based on you enviroment
+   NOTE: modify the IP addresses based on your environment
 
 1. Create the physical replications slot, one per replica server
 
@@ -92,15 +93,15 @@ In PostgreSQL on pgserverA, restore the test database [Pagila](https://github.co
    FROM  pg_replication_slots;
    ```
 
-   NOTE: The *active_pid* cloumns shows pid for PostgreSQL walsender process. It is empty as the slots are not in use yet.
+   NOTE: The *active_pid* column shows pid for PostgreSQL walsender process. It is empty as the slots are not in use yet.
 
 ---
 
-## 3. Add a replica server
+## 3. Add the PostgreSQL replicas
 
-1. Connect to replica server pgserverB
+1. Connect to replica server pgserverB using SSH
 
-1. Impersonnate the SO postgres user 
+1. Impersonate  the SO postgres user 
 
    ```bash
    sudo -i -u postgres
@@ -132,7 +133,7 @@ In PostgreSQL on pgserverA, restore the test database [Pagila](https://github.co
    ls -ls /var/lib/postgresql/18/main/
    ```
 
-1. Confirm that the *primary_conninfo* and *primary_slot_name* paramters have ben set automaticaly
+1. Confirm that the *primary_conninfo* and *primary_slot_name* parameters have been set automatically
 
    ```bash
    more /var/lib/postgresql/18/main/postgresql.auto.conf
@@ -156,25 +157,25 @@ In PostgreSQL on pgserverA, restore the test database [Pagila](https://github.co
 	ps -ef | grep postg
    ```
 
-1. Connect to the primary PostgreSQL cluster server  and check there is now a walsender processes for the first repliac
+1. Connect to the primary PostgreSQL cluster server and check there is now a walsender processes for the first replica
 
    ```bash
 	ps -ef | grep postg
    ```
 
-1. Connect to the primary PostgreSQL cluster server  and check the *active_pid* columns shows the pid fot the walsender process. Also notice that the column *active* now shows *t* (True).
+1. Connect to the primary PostgreSQL cluster server and check the *active_pid* column shows the pid for the walsender process. Also notice that the column *active* now shows *t* (True).
 
    ```sql
    SELECT slot_name, slot_type, temporary, active, active_pid, restart_lsn, wal_status
    FROM  pg_replication_slots;
    ```
 
-1. Repeat the steps add pgserverC and pgserverD replicas.
+1. Repeat all the steps to add pgserverC and pgserverD replicas.
 
 ---
 ## 4. Test and monitor replication
 
-1. Connect to primary server and create a new table with a few records
+1. Connect to primary PostgreSQL cluster and create a new table with a few records
 
 	```sql
     CREATE TABLE animals (
@@ -195,7 +196,7 @@ In PostgreSQL on pgserverA, restore the test database [Pagila](https://github.co
    SELECT * FROM animals;
    ```
 
-1. Connect to one or all replica servers and confirm the table and its records has been replicated
+1. Connect to one or all replica PostgreSQL clusters  and confirm the table and its records has been replicated
 
    ```sql
    SELECT * FROM animals;
@@ -210,7 +211,7 @@ In PostgreSQL on pgserverA, restore the test database [Pagila](https://github.co
    SELECT * FROM pg_stat_wal_receiver;
    ```
 
-1. You can confirm th replica is recovy mode by running:
+1. You can confirm the replica is recovery mode by running:
 
    ```sql
    SELECT pg_is_in_recovery();
@@ -225,11 +226,11 @@ In PostgreSQL on pgserverA, restore the test database [Pagila](https://github.co
 
 ---
 
-## 5. Set a syncronous replica server
+## 5. Set a synchronous replica server
 
-Let's start by setting only one syncronous replica, and see the inmpact it as
+Let's start by setting only one synchronous replica, and see the impact it as
 
-1. In the replica server pgserverB, edit */var/lib/postgresql/18/main/postgresql.auto.conf* to inlcude "application_name=pgserverB*
+1. In the replica server pgserverB, edit */var/lib/postgresql/18/main/postgresql.auto.conf* to include "application_name=pgserverB*
 
    NOTE: Not the recommended method as postgresql.auto.conf should not be manually edited. 
 
@@ -281,9 +282,10 @@ Let's start by setting only one syncronous replica, and see the inmpact it as
 
    it is frozen... not good, if the syn replica is down, the primary wont be available 
 
-   > TO void the primary server to be "frozen" while the sync replicas are unabailable, there are 2 options
-   > - set synchronous_commit = off risk of data lost,  but you primaery is available
-   >- add addional syn replicas and set synchronous_standby_names using the FIRST or ANY option. That what we will do here!
+   > To avoid the primary server to be "frozen" while the sync replicas are unavailable, there are 2 options
+   > - set synchronous_commit = off risk of data lost,  but you primary is available
+   >- add additional syn replicas and set synchronous_standby_names using the FIRST or ANY option. That is what we will do here!
+
 
 1. Start the replica server 
 
@@ -291,15 +293,18 @@ Let's start by setting only one syncronous replica, and see the inmpact it as
    systemctl start postgresql@18-main
    ```
 
-1. See that "frozen" insert operation has now finished. You can query the table in the server replica and see that row is also there. This show how PostgreSQL protect agins data loss
+1. See that "frozen" insert operation has now finished. You can query the table in the server replica and see that row is also there. This shows how PostgreSQL protect against data loss
 
-1. Add additional sync and asyn replicas
+1. Add additional sync and async replicas
 
-   - Do step 5.1 for servers pgserverV and pgserverC
+   - Do step 5.1 for servers pgserverb and pgserverC
    
-   - Set the primary so it requires that any 1 of the sync replicas answer before continuing. This will allow the primary server to continue if on of pgserverB and pgserverC is unavailbel, ensuer one of them will be on sync and there is no data loss.
+   - Set the primary so it requires that any 1 of the sync replicas answer before continuing. This will allow the primary server to continue if on of pgserverB and pgserverC is unavailable, ensure one of them will be on sync and there is no data loss.
 
-   - add addional syn replicas and set synchronous_standby_names using the FRISt or NAY
+   - add additional syn replicas and set synchronous_standby_names using the FIRST or ANY
+
+     Review  [synchronous_standby_names](https://www.postgresql.org/docs/current/runtime-config-replication.html#GUC-SYNCHRONOUS-STANDBY-NAMES) for additional details of all possible options
+
 
      Review  [synchronous_standby_names](https://www.postgresql.org/docs/current/runtime-config-replication.html#GUC-SYNCHRONOUS-STANDBY-NAMES) for additinal detls of all possible options
 
@@ -333,7 +338,7 @@ Let's start by setting only one syncronous replica, and see the inmpact it as
 
    no wait
 
-1. Start the repclia server 
+1. Start the replica server 
 
    ```bash
    systemctl start postgresql@18-main
@@ -345,7 +350,7 @@ Let's start by setting only one syncronous replica, and see the inmpact it as
 
 ## 6. What happens to the WAL files in the primary when a replica is not available?
 
-There are 3 important paramters you need consider to understand how PostgreSQL will behave in this escenario;
+There are 3 important parameters you need consider to understand how PostgreSQL will behave in this scenario:
 
 - [wal_keep_size](https://www.postgresql.org/docs/current/runtime-config-replication.html#GUC-WAL-KEEP-SIZE) Specifies the minimum size of past WAL files kept in the pg_wal directory, in case a standby server needs to fetch them for streaming replication. If a standby server connected to the sending server falls behind by more than wal_keep_size megabytes, the sending server might remove a WAL segment still needed by the standby, in which case the replication connection will be terminated. Downstream connections will also eventually fail as a result. (However, the standby server can recover by fetching the segment from archive, if WAL archiving is in use.)
 
