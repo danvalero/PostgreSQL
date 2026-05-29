@@ -1,0 +1,90 @@
+RESOURCE_GROUP="pg-replication-lab1"
+LOCATION="centralus"
+
+VNET_NAME="pg-vnet-demo"
+ADDRESS_SPACE="10.0.0.0/16"
+
+SUBNET1_NAME="Default"
+SUBNET1_PREFIX="10.0.1.0/24"
+
+SUBNET2_NAME="VMs"
+SUBNET2_PREFIX="10.0.2.0/24"
+
+VM_SIZE="Standard_D2s_v3"
+
+ADMIN_USER="dba"
+ADMIN_PASSWORD="CaracasBogota1." 
+
+# Resources creation
+
+az group create \
+  --name $RESOURCE_GROUP \
+  --location $LOCATION
+
+# Create VNet with first subnet (Default)
+az network vnet create \
+  --resource-group $RESOURCE_GROUP \
+  --location $LOCATION \
+  --name $VNET_NAME \
+  --address-prefix $ADDRESS_SPACE \
+  --subnet-name $SUBNET1_NAME \
+  --subnet-prefix $SUBNET1_PREFIX
+
+# Create second subnet (VMs)
+
+az network vnet subnet create \
+  --resource-group $RESOURCE_GROUP \
+  --vnet-name $VNET_NAME \
+  --name $SUBNET2_NAME \
+  --address-prefix $SUBNET2_PREFIX
+
+az vm create \
+  --resource-group $RESOURCE_GROUP \
+  --name pgserverA \
+  --image Ubuntu2404 \
+  --size $VM_SIZE \
+  --admin-username $ADMIN_USER \
+  --admin-password $ADMIN_PASSWORD \
+  --authentication-type password \
+  --vnet-name $VNET_NAME \
+  --subnet $SUBNET2_NAME \
+  --public-ip-sku Standard
+
+az vm create \
+  --resource-group $RESOURCE_GROUP \
+  --name pgserverB \
+  --image Ubuntu2404 \
+  --size $VM_SIZE \
+  --admin-username $ADMIN_USER \
+  --admin-password $ADMIN_PASSWORD \
+  --authentication-type password \
+  --vnet-name $VNET_NAME \
+  --subnet $SUBNET2_NAME \
+  --public-ip-sku Standard
+
+az vm create \
+  --resource-group $RESOURCE_GROUP \
+  --name pgserverC \
+  --image Ubuntu2404 \
+  --size $VM_SIZE \
+  --admin-username $ADMIN_USER \
+  --admin-password $ADMIN_PASSWORD \
+  --authentication-type password \
+  --vnet-name $VNET_NAME \
+  --subnet $SUBNET2_NAME \
+  --public-ip-sku Standard
+
+az vm create \
+  --resource-group $RESOURCE_GROUP \
+  --name pgserverD \
+  --image Ubuntu2404 \
+  --size $VM_SIZE \
+  --admin-username $ADMIN_USER \
+  --admin-password $ADMIN_PASSWORD \
+  --authentication-type password \
+  --vnet-name $VNET_NAME \
+  --subnet $SUBNET2_NAME \
+  --public-ip-sku Standard
+
+#To clean up use:
+az group delete --name $RESOURCE_GROUP
